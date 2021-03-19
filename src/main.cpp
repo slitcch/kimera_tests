@@ -1,12 +1,14 @@
 /**
  * @file main.cpp
  * @author Duncan Hamill (duncanrhamill@googlemail.com)
+ * @author Moses Turner (mosesturner@protonmail.com)
  * @brief OAK-D/Kimera Experiments main file.
  * 
  * @version 0.1
  * @date 2021-01-16
  * 
  * @copyright Copyright (c) Duncan R Hamill 2021
+ * @copyright Moses Turner, 2021.
  */
 
 /* -------------------------------------------------------------------------
@@ -14,6 +16,19 @@
  * ------------------------------------------------------------------------- */
 
 #include <iostream>
+#include <chrono>
+#include <thread>
+
+#include <kimera-vio/common/vio_types.h>
+#include <kimera-vio/pipeline/Pipeline.h>
+#include <kimera-vio/frontend/Frame.h>
+#include <kimera-vio/utils/Statistics.h>
+#include <kimera-vio/utils/Timer.h>
+
+#include "kimera-vio/frontend/StereoFrame.h"
+#include "kimera-vio/imu-frontend/ImuFrontEnd-definitions.h"
+#include "kimera-vio/logging/Logger.h"
+#include "kimera-vio/utils/YamlParser.h"
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/ximgproc/disparity_filter.hpp>
@@ -21,13 +36,16 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
-#include <kimera-vio/pipeline/Pipeline.h>
-#include <kimera-vio/frontend/Frame.h>
-#include <kimera-vio/utils/Statistics.h>
-#include <kimera-vio/utils/Timer.h>
 
-#include "depthai/depthai.hpp"
-#include "util.h"
+
+// #include "depthai/depthai.hpp"
+// #include "util.h"
+
+#include <librealsense2/rs.hpp>
+// #include <librealsense2/h/rs_types.h>
+// #include <librealsense2/h/rs_pipeline.h>
+// #include <librealsense2/h/rs_option.h>
+// #include <librealsense2/h/rs_frame.h>
 
 /* -------------------------------------------------------------------------
  * CONSTANTS
@@ -40,8 +58,10 @@
 // This defines a variable called FLAGS_params_folder_path, for some reason.
 DEFINE_string(
     params_folder_path,
-    "params/OAK-D",
+    "params/t26x",
     "Path to the folder containing the yaml files with the VIO parameters.");
+
+uint64_t frame_id = 0; // not a good way of doing this...
 
 /* -------------------------------------------------------------------------
  * STRUCTS
@@ -53,9 +73,19 @@ typedef struct _Pose {
     cv::Mat rotation;
 } Pose;
 
+
+VIO::Timestamp timestamp_rs_to_vio(rs2::frame& frame) {
+    return (VIO::Timestamp)(
+        (int64_t)(frame.get_timestamp() * 1000000000)
+    );
+}
+
 /* -------------------------------------------------------------------------
  * MAIN
  * ------------------------------------------------------------------------- */
+
+bool cango0 = false;
+bool cango1 = false;
 
 int main(int argc, char *argv[]) {
 
@@ -68,103 +98,90 @@ int main(int argc, char *argv[]) {
     // Parse VIO parameters from gflags.
     VIO::VioParams vio_params(FLAGS_params_folder_path);
 
-    // A current issue (https://github.com/MIT-SPARK/Kimera-VIO/issues/48)
-    // shows that using already rectified images is a little broken, we have to
-    // patch the P and R_rectify values of each camera parameter to empty
-    // matrices, because for some reason they're not set if we pass
-    // images_rectified=true. 
-    vio_params.camera_params_[0].P_ = cv::Mat::eye(3, 3, CV_32F);
-    vio_params.camera_params_[0].R_rectify_ = cv::Mat::eye(3, 3, CV_32F);
-    vio_params.camera_params_[1].P_ = cv::Mat::eye(3, 3, CV_32F);
-    vio_params.camera_params_[1].R_rectify_ = cv::Mat::eye(3, 3, CV_32F);
-
     // Create the VIO pipeline
     VIO::Pipeline vio_pipeline(vio_params);
 
-    // Create the pipeline that we're going to build. Pipelines are depthai's
-    // way of chaining up different series or parallel process, sort of like
-    // gstreamer. 
-    //
-    // Our pipeline is going to extract the left and right rectified images
-    // from the cameras so we can pass these into the SLAM system, as well as
-    // disparity maps for building a point cloud.
-    dai::Pipeline pipeline;
+		// Shoutout to Damien Rompapas (https://github.com/HyperLethalVector) for the Realsense code I'm copying:
+		rs2::pipeline pipe;
+    rs2::config cfg;
+    rs2::pipeline_profile myProf; 
+    std::vector<std::string> serials;
+    uint32_t dev_q; 
+    rs2::context ctx; 
+    cfg.enable_stream(rs2_stream::RS2_STREAM_FISHEYE, 1);
+    cfg.enable_stream(rs2_stream::RS2_STREAM_FISHEYE, 2);
+    // cfg.enable_stream(rs2_stream::RS2_STREAM_ACCEL, RS2_FORMAT_MOTION_XYZ32F);
+    // cfg.enable_stream(rs2_stream::RS2_STREAM_GYRO, RS2_FORMAT_MOTION_XYZ32F);
+		cfg.enable_stream(RS2_STREAM_POSE, RS2_FORMAT_6DOF);
+		int64_t already = 0;
 
-    // We need to create all the nodes in our pipeline, which are:
-    //  - the left and right monochrome (greyscale) stereo cameras of the OAK-D
-    //  - a stereo depth node, which generates disparity maps and rectified
-    //    images. The disparity map will be used in constructing the global 
-    //    point cloud, and the rectified images for SLAM tracking.
-    //  - output nodes, which allow us to get the rectified image data and
-    //    disparity map to use outside the pipeline.
-    auto mono_left = pipeline.create<dai::node::MonoCamera>();
-    auto mono_right = pipeline.create<dai::node::MonoCamera>();
-    auto stereo = pipeline.create<dai::node::StereoDepth>();
-    auto xout_rectif_left = pipeline.create<dai::node::XLinkOut>();
-    auto xout_rectif_right = pipeline.create<dai::node::XLinkOut>();
-    auto xout_disp = pipeline.create<dai::node::XLinkOut>();
+		auto profile = pipe.start(cfg, [&](rs2::frame frame)
+		{
+			if (rs2::pose_frame fs = frame.as<rs2::pose_frame>())
+			{
+				cango0 = true;
+				std::cout << "hey dog1\n";
 
-    // And we set the names of each output node, so we can access them later as
-    // output queues
-    xout_rectif_left->setStreamName("rectified_left");
-    xout_rectif_right->setStreamName("rectified_right");
-    xout_disp->setStreamName("disparity");
+				rs2_pose pose = fs.get_pose_data();
+				
+				// First 3 elements correspond to acceleration data [m/s^2]
+				// while the 3 last correspond to angular velocities [rad/s].
+				VIO::ImuAccGyr reading;
+				reading(0) = pose.acceleration.x;
+				reading(1) = pose.acceleration.y;
+				reading(2) = pose.acceleration.z;
+				reading(3) = pose.angular_acceleration.x;
+				reading(4) = pose.angular_acceleration.y;
+				reading(5) = pose.angular_acceleration.z;
+				VIO::Timestamp time = timestamp_rs_to_vio(frame);
+				//VIO::ImuAccGyr(pose.acceleration.x, pose.acceleration.y, pose.acceleration.z,
+													//  pose.angular_acceleration.x, pose.angular_acceleration.y, pose.angular_acceleration.z)
+				if (time >= already){
+				vio_pipeline.fillSingleImuQueue(VIO::ImuMeasurement(
+            timestamp_rs_to_vio(frame),reading
+            
+        ));} else {
+					// std::cout << "what the heck\n";
+				}
+			}
+			else if (auto fs = frame.as<rs2::frameset>())
+			{
+				// rs2::video_frame frame_left = fs.get_fisheye_frame(1).get_data();
+				// rs2::video_frame frame_right = fs.get_fisheye_frame(2);
+				if (cango0){
+				cango1 = true;
+				std::cout << frame_id << " hey dog\n";
+				cv::Mat fisheye_left  = cv::Mat(cv::Size(848,800), CV_8UC1, (void*)fs.get_fisheye_frame(1).get_data(), cv::Mat::AUTO_STEP);
+				cv::Mat fisheye_right = cv::Mat(cv::Size(848,800), CV_8UC1, (void*)fs.get_fisheye_frame(2).get_data(), cv::Mat::AUTO_STEP);
 
-    // Now we set which cameras are actually connected to the left and right
-    // nodes, and set their resolution and framerate
-    mono_left->setBoardSocket(dai::CameraBoardSocket::LEFT);
-    mono_left->setResolution(
-        dai::MonoCameraProperties::SensorResolution::THE_720_P
-    );
-    mono_left->setFps(20.0);
-    mono_right->setBoardSocket(dai::CameraBoardSocket::RIGHT);
-    mono_right->setResolution(
-        dai::MonoCameraProperties::SensorResolution::THE_720_P
-    );
-    mono_right->setFps(20.0);
+				cv::imshow("video",fisheye_left);
+				cv::imshow("video1",fisheye_right);
+				cv::waitKey(1);
 
-    // Now we set the stereo node to output rectified images and disp maps. We
-    // also set the rectify frames to not be mirrored, and to use black to fill
-    // the edges of the rectified images. We need non-flipped images as we're
-    // going to use them later down the line as input to the SLAM,
-    // unfortunately this means our output disparity map will be flipped, so
-    // we'll have to correct that later. We don't output depth as this would
-    // disable the disparity map output.
-    // 
-    // We also enable extended disparity depth, which increases the maximum 
-    // disparity and therefore provides a shorter minimum depth.
-    stereo->setOutputRectified(true);
-    stereo->setOutputDepth(false);
-    stereo->setRectifyEdgeFillColor(0);
-    stereo->setRectifyMirrorFrame(false);
-    stereo->setExtendedDisparity(true);
+				VIO::Timestamp time = timestamp_rs_to_vio(frame);
 
-    // We now link the cameras up to the stereo node
-    mono_left->out.link(stereo->left);
-    mono_right->out.link(stereo->right);
+				vio_pipeline.fillLeftFrameQueue(VIO::make_unique<VIO::Frame>(
+            (VIO::FrameId)frame_id,
+            time,
+            vio_params.camera_params_[0],
+            fisheye_left
+        ));
+        vio_pipeline.fillRightFrameQueue(VIO::make_unique<VIO::Frame>(
+            (VIO::FrameId)frame_id,
+            time,
+            vio_params.camera_params_[1],
+            fisheye_right
+        ));
+				frame_id++; // BAD
+			}}
+		} );
 
-    // And the stereo rectified and disp outputs to the output nodes
-    stereo->rectifiedLeft.link(xout_rectif_left->input);
-    stereo->rectifiedRight.link(xout_rectif_right->input);
-    stereo->disparity.link(xout_disp->input);
+		while(!(cango0 && cango1)) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		}
 
-    // Now we can connect to the OAK-D device and start our pipeline
-    dai::Device device(pipeline);
-    device.startPipeline();
+		std::this_thread::sleep_for(std::chrono::milliseconds(10000));
 
-    // Finally to actually see the outputs we need to get their output queues
-    // We use a max buffer size of 8 frames and set it into non-blocking mode.
-    auto rectif_left_queue = device.getOutputQueue("rectified_left", 8, false);
-    auto rectif_right_queue = device.getOutputQueue("rectified_right", 8, false);
-    auto disp_queue = device.getOutputQueue("disparity", 8, false);
-    
-    // Create the WLS (weighted least squares) filter, which we use to improve
-    // the quality of our disparity map. Also set the lambda and sigma values
-    auto wls_filter = cv::ximgproc::createDisparityWLSFilterGeneric(false);
-    wls_filter->setLambda(WLS_LAMBDA);
-    wls_filter->setSigmaColor(WLS_SIGMA);
-
-    // Formatter, for printing out matrices in a reasonable way.
     cv::Ptr<cv::Formatter> fmt = cv::Formatter::get(cv::Formatter::FMT_DEFAULT);
     fmt->set64fPrecision(3);
     fmt->set32fPrecision(3);
@@ -179,52 +196,26 @@ int main(int argc, char *argv[]) {
 
     // Now for the main loop
     while (1) {
-        // Read the output frames from the OAK-D. These are blocking calls, so
-        // they will wait until there's data available.
-        auto rectif_left_frame = rectif_left_queue->get<dai::ImgFrame>();
-        auto rectif_right_frame = rectif_left_queue->get<dai::ImgFrame>();
-        auto disp_map_frame = disp_queue->get<dai::ImgFrame>();
-
-        // Convert the frames into opencv images
-        auto rectif_left = imgframe_to_mat(rectif_left_frame);
-        auto rectif_right = imgframe_to_mat(rectif_right_frame);
-        auto disp_map = imgframe_to_mat(disp_map_frame);
-
-        // Create VIO frames, which are a bit more complicated than just an
-        // image. The parameters here are:
-        //  - a frame_id, which we just count sequentially, as they are used as
-        //    indexes into GTSAM (so a timestamp _probably_ won't work)
-        //  - a timestamp, which should be simple, but no. DepthAI and Kimera
-        //    use different timestamp values, and Kimera doesn't say what their
-        //    underlying int64_t represents. So we're going to go with
-        //    DepthAI's number of nanoseconds + seconds as int64_t (~9bn
-        //    seconds, should be fine). The timestamps of the left and right
-        //    camera must match, so we just use the left camera timetsamps.
-        //  - the camera parameters, which are stored in a vector in
-        //    vio_params, and I'm assuming that left is 0 and right is 1.
-        //  - finally, the actual image...
-        //
-        // Parse the frames into the pipeline. This is done using callbacks, so
-        // we could create a fully callback based data source built on top of
-        // the OAK-D, but for now we'll do it simply with standalone calls
-        vio_pipeline.fillLeftFrameQueue(VIO::make_unique<VIO::Frame>(
-            (VIO::FrameId)frame_id,
-            depthai_ts_to_kimera_ts(rectif_left_frame->getTimestamp()),
-            vio_params.camera_params_[0],
-            rectif_left
-        ));
-        vio_pipeline.fillRightFrameQueue(VIO::make_unique<VIO::Frame>(
-            (VIO::FrameId)frame_id,
-            depthai_ts_to_kimera_ts(rectif_left_frame->getTimestamp()),
-            vio_params.camera_params_[1],
-            rectif_right
-        ));
+			// pipe.wait_for_frames()
+        
+      //   vio_pipeline.fillLeftFrameQueue(VIO::make_unique<VIO::Frame>(
+      //       (VIO::FrameId)frame_id,
+      //       depthai_ts_to_kimera_ts(rectif_left_frame->getTimestamp()),
+      //       vio_params.camera_params_[0],
+      //       rectif_left
+      //   ));
+      //   vio_pipeline.fillRightFrameQueue(VIO::make_unique<VIO::Frame>(
+      //       (VIO::FrameId)frame_id,
+      //       depthai_ts_to_kimera_ts(rectif_left_frame->getTimestamp()),
+      //       vio_params.camera_params_[1],
+      //       rectif_right
+      //   ));
 
         
-        vio_pipeline.fillSingleImuQueue(VIO::ImuMeasurement(
-            depthai_ts_to_kimera_ts(rectif_left_frame->getTimestamp()),
-            VIO::ImuAccGyr::Zero()
-        ));
+      //   vio_pipeline.fillSingleImuQueue(VIO::ImuMeasurement(
+      //       depthai_ts_to_kimera_ts(rectif_left_frame->getTimestamp()),
+      //       VIO::ImuAccGyr::Zero()
+      //   ));
 
         // Spin the VIO pipeline. This performs a single calculation cycle of
         // the pipeline, effectively this is the "Run the SLAM" step.
@@ -258,33 +249,16 @@ int main(int argc, char *argv[]) {
         // else {
         //     // If we didn't get a pose update log it.
         //     std::cout << "no pose update" << std::endl;
-        // }
+        // // }
 
-        // The raw disparity map is flipped, since we flipped the rectified
-        // images, so we must flip it as well.
-        cv::flip(disp_map, disp_map, 1);
-
-        // Filter the disparity map
-        cv::Mat filtered_disp_map;
-        wls_filter->filter(disp_map, rectif_right, filtered_disp_map);
-
-        // Apply a colormap to the filtered disparity map, but don't normalise
-        // it. Normalising the map will mean that the color doesn't correspond
-        // directly with disparity.
-        cv::Mat colour_disp;
-        cv::applyColorMap(filtered_disp_map, colour_disp, cv::COLORMAP_JET);
-        cv::imshow("disparity", colour_disp);
 
         // Spin the VIO vizualizer, which displays the graphs
-        // vio_pipeline.spinViz();
+        vio_pipeline.spinViz();
 
         // Increment the frame ID
         frame_id++;
 
-        // See if q pressed, if so quit
-        if (cv::waitKey(1) == 'q') {
-            break;
-        }
+
     }
 
     // Shutdown the VIO pipeline

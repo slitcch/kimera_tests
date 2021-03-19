@@ -10,7 +10,7 @@ DATASET_PATH="/path/to/euroc/dataset"
 DATASET_TYPE=0
 
 # Specify: 1 to enable the LoopClosureDetector, 0 to not.
-USE_LCD=1
+USE_LCD=0
 
 # Specify: 1 to enable logging of output files, 0 to not.
 LOG_OUTPUT=1
@@ -24,7 +24,7 @@ LOG_OUTPUT=1
 BUILD_PATH="./bin"
 
 # Params path: specify where the parameters for Kimera are.
-PARAMS_PATH="params/OAK-D"
+PARAMS_PATH="params/t26x"
 
 # Vocabulary path: specify where the vocabulary for loop closure is.
 VOCABULARY_PATH="./vocabulary"
@@ -88,7 +88,7 @@ $BUILD_PATH/oakd_kimera \
   --initial_k=50 \
   --final_k=2000 \
   --params_folder_path="$PARAMS_PATH" \
-  --images_rectified=1
+  --images_rectified=1 \
   --use_lcd="$USE_LCD" \
   --vocabulary_path="$VOCABULARY_PATH/ORBvoc.yml" \
   --flagfile="$PARAMS_PATH/flags/stereoVIOEuroc.flags" \

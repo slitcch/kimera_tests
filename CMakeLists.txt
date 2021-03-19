@@ -17,7 +17,8 @@ set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,-z,now")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-find_package(OpenCV 3 REQUIRED)
+find_package(realsense2 REQUIRED)
+find_package(OpenCV 4 REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(Gflags REQUIRED)
 find_package(Glog 0.3.5 REQUIRED)
@@ -35,7 +36,7 @@ find_package(kimera_vio REQUIRED)
 
 include_directories(
     ${OpenCV_INCLUDE_DIR}
-    ${PROJECT_SOURCE_DIR}/depthai-core/include
+		${PROJECT_SOURCE_DIR}/depthai-core/include
     ${EIGEN3_INCLUDE_DIRS}
 )
 
@@ -54,6 +55,9 @@ add_executable(${TARGET_NAME}
 )
 target_link_libraries(${TARGET_NAME} PUBLIC
     ${OpenCV_LIBS}
-    depthai-core
-    kimera_vio
+		realsense2
+		depthai-core
+		gtsam
+		kimera_vio
+    
 )
