@@ -88,7 +88,7 @@ $BUILD_PATH/oakd_kimera \
   --initial_k=50 \
   --final_k=2000 \
   --params_folder_path="$PARAMS_PATH" \
-  --images_rectified=1 \
+  --images_rectified=0 \
   --use_lcd="$USE_LCD" \
   --vocabulary_path="$VOCABULARY_PATH/ORBvoc.yml" \
   --flagfile="$PARAMS_PATH/flags/stereoVIOEuroc.flags" \

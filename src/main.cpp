@@ -18,6 +18,8 @@
 #include <iostream>
 #include <chrono>
 #include <thread>
+#include <future>
+
 
 #include <kimera-vio/common/vio_types.h>
 #include <kimera-vio/pipeline/Pipeline.h>
@@ -75,9 +77,13 @@ typedef struct _Pose {
 
 
 VIO::Timestamp timestamp_rs_to_vio(rs2::frame& frame) {
-    return (VIO::Timestamp)(
-        (int64_t)(frame.get_timestamp() * 1000000000)
-    );
+	double ts_rs = frame.get_timestamp() - (double)1616190000000.0f;
+
+	int64_t ts_vio = (int64_t)(ts_rs * 1000.0f * 1000.0f * 1000.0f);
+	
+	// std::cout << ts_rs << " " << ts_vio << "\n";
+
+    return (VIO::Timestamp)ts_vio;
 }
 
 /* -------------------------------------------------------------------------
@@ -120,7 +126,7 @@ int main(int argc, char *argv[]) {
 			if (rs2::pose_frame fs = frame.as<rs2::pose_frame>())
 			{
 				cango0 = true;
-				std::cout << "hey dog1\n";
+				// std::cout << "hey dog1\n";
 
 				rs2_pose pose = fs.get_pose_data();
 				
@@ -150,7 +156,7 @@ int main(int argc, char *argv[]) {
 				// rs2::video_frame frame_right = fs.get_fisheye_frame(2);
 				if (cango0){
 				cango1 = true;
-				std::cout << frame_id << " hey dog\n";
+				// std::cout << frame_id << " hey dog\n";
 				cv::Mat fisheye_left  = cv::Mat(cv::Size(848,800), CV_8UC1, (void*)fs.get_fisheye_frame(1).get_data(), cv::Mat::AUTO_STEP);
 				cv::Mat fisheye_right = cv::Mat(cv::Size(848,800), CV_8UC1, (void*)fs.get_fisheye_frame(2).get_data(), cv::Mat::AUTO_STEP);
 
@@ -162,15 +168,15 @@ int main(int argc, char *argv[]) {
 
 				vio_pipeline.fillLeftFrameQueue(VIO::make_unique<VIO::Frame>(
             (VIO::FrameId)frame_id,
-            time,
-            vio_params.camera_params_[0],
-            fisheye_left
+            (VIO::Timestamp)time,
+            (VIO::CameraParams&)vio_params.camera_params_[0],
+            (cv::Mat&)fisheye_left
         ));
         vio_pipeline.fillRightFrameQueue(VIO::make_unique<VIO::Frame>(
             (VIO::FrameId)frame_id,
-            time,
-            vio_params.camera_params_[1],
-            fisheye_right
+            (VIO::Timestamp)time,
+            (VIO::CameraParams&)vio_params.camera_params_[1],
+            (cv::Mat&)fisheye_right
         ));
 				frame_id++; // BAD
 			}}
@@ -180,7 +186,7 @@ int main(int argc, char *argv[]) {
 			std::this_thread::sleep_for(std::chrono::milliseconds(100));
 		}
 
-		std::this_thread::sleep_for(std::chrono::milliseconds(10000));
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     cv::Ptr<cv::Formatter> fmt = cv::Formatter::get(cv::Formatter::FMT_DEFAULT);
     fmt->set64fPrecision(3);
@@ -189,77 +195,11 @@ int main(int argc, char *argv[]) {
     // We also want somewhere to store our pose data
     Pose pose;
 
-    // The time of each frame is required for SLAM, so we take an epoch time
-    // (i.e. our start time) now
-    auto slam_epoch = std::chrono::steady_clock::now();
-    uint64_t frame_id = 0;
-
     // Now for the main loop
-    while (1) {
-			// pipe.wait_for_frames()
-        
-      //   vio_pipeline.fillLeftFrameQueue(VIO::make_unique<VIO::Frame>(
-      //       (VIO::FrameId)frame_id,
-      //       depthai_ts_to_kimera_ts(rectif_left_frame->getTimestamp()),
-      //       vio_params.camera_params_[0],
-      //       rectif_left
-      //   ));
-      //   vio_pipeline.fillRightFrameQueue(VIO::make_unique<VIO::Frame>(
-      //       (VIO::FrameId)frame_id,
-      //       depthai_ts_to_kimera_ts(rectif_left_frame->getTimestamp()),
-      //       vio_params.camera_params_[1],
-      //       rectif_right
-      //   ));
-
-        
-      //   vio_pipeline.fillSingleImuQueue(VIO::ImuMeasurement(
-      //       depthai_ts_to_kimera_ts(rectif_left_frame->getTimestamp()),
-      //       VIO::ImuAccGyr::Zero()
-      //   ));
-
-        // Spin the VIO pipeline. This performs a single calculation cycle of
-        // the pipeline, effectively this is the "Run the SLAM" step.
-        if (!vio_pipeline.spin()) {
-            std::cout << "VIO Pipeline spin failed" << std::endl;
-            return EXIT_FAILURE;
-        }
-
-        // std::cout << std::setprecision(4) << frame_timestamp_s << ": ";
-
-        // The output pose may be empty if the system was unable to track the
-        // movement, so only get position and rotation if pose isn't empty. We
-        // also put this info an a localisation fix available flag for later
-        // use. 
-        // bool loc_fix_available = !raw_pose.empty();
-        // if (loc_fix_available) {
-        //     // The pose matrix is a 4x4 extrinsic matrix, with the form:
-        //     // [R_3x3 T_3x1; [0 0 0 1]], we can find the camera position with 
-        //     // C = -R'T (R' = R transpose).
-        //     pose.rotation = raw_pose(cv::Rect(0, 0, 3, 3));
-        //     cv::Mat T = raw_pose(cv::Rect(3, 0, 1, 3));
-        //     pose.position = -pose.rotation.t()*T;
-
-        //     // Print the updated position, but transpose it so that instead of
-        //     // a column vector we have a row vector, which is easier to read.
-        //     std::cout << 
-        //         "position: " << 
-        //         fmt->format(pose.position.t()) << 
-        //         std::endl;
-        // }
-        // else {
-        //     // If we didn't get a pose update log it.
-        //     std::cout << "no pose update" << std::endl;
-        // // }
-
-
-        // Spin the VIO vizualizer, which displays the graphs
-        vio_pipeline.spinViz();
-
-        // Increment the frame ID
-        frame_id++;
-
-
-    }
+			auto handle_pipeline = std::async(std::launch::async, &VIO::Pipeline::spin, &vio_pipeline);
+			std::cout << "refasdfsafdfasdfa\n";
+			vio_pipeline.spinViz(); // runs forever
+			// Above two lines will only do what you want if you have parallel_run: 1 in PipelineParams.yaml
 
     // Shutdown the VIO pipeline
     vio_pipeline.shutdown();
