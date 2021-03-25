@@ -24,8 +24,8 @@ profiles = pipe.get_active_profile()
 
 streams = {"left"  : profiles.get_stream(rs.stream.fisheye, 1).as_video_stream_profile(),
            "right" : profiles.get_stream(rs.stream.fisheye, 2).as_video_stream_profile(), 
-					 "accel" : profiles.get_stream(rs.stream.accel),
-					 "gyro"  : profiles.get_stream(rs.stream.gyro)} # No idea why these don't need .as_motion_stream_profile()
+					 "accel" : profiles.get_stream(rs.stream.accel).as_motion_stream_profile(),
+					 "gyro"  : profiles.get_stream(rs.stream.gyro).as_motion_stream_profile()} # No idea why these don't need .as_motion_stream_profile()
 
 intrinsics = {"left"  : streams["left"].get_intrinsics(),
                   "right" : streams["right"].get_intrinsics()}
@@ -52,3 +52,11 @@ print(intrinsics["right"])
 print(cameramatrix(intrinsics["right"]))
 print("\n\n")
 
+print("========= GYRO =========")
+
+print(streams["gyro"].get_motion_intrinsics())
+
+print("\n\n========= ACCEL =========")
+
+
+print(streams["accel"].get_motion_intrinsics())

@@ -14,6 +14,7 @@
 /* -------------------------------------------------------------------------
  * INCLUDES
  * ------------------------------------------------------------------------- */
+#include <time.h>
 
 #include <iostream>
 #include <chrono>
@@ -93,6 +94,18 @@ VIO::Timestamp timestamp_rs_to_vio(rs2::frame& frame) {
 bool cango0 = false;
 bool cango1 = false;
 
+#define U_1_000_000_000 (1000000000)
+
+
+static inline uint64_t
+os_timespec_to_ns(const struct timespec *spec)
+{
+	uint64_t ns = 0;
+	ns += (uint64_t)spec->tv_sec * U_1_000_000_000;
+	ns += (uint64_t)spec->tv_nsec;
+	return ns;
+}
+
 int main(int argc, char *argv[]) {
 
     std::cout << "OAK-D/Kimera-VIO Experiment\n" << std::endl;
@@ -116,77 +129,16 @@ int main(int argc, char *argv[]) {
     rs2::context ctx; 
     cfg.enable_stream(rs2_stream::RS2_STREAM_FISHEYE, 1);
     cfg.enable_stream(rs2_stream::RS2_STREAM_FISHEYE, 2);
-    // cfg.enable_stream(rs2_stream::RS2_STREAM_ACCEL, RS2_FORMAT_MOTION_XYZ32F);
-    // cfg.enable_stream(rs2_stream::RS2_STREAM_GYRO, RS2_FORMAT_MOTION_XYZ32F);
+    cfg.enable_stream(rs2_stream::RS2_STREAM_ACCEL, RS2_FORMAT_MOTION_XYZ32F);
+    cfg.enable_stream(rs2_stream::RS2_STREAM_GYRO, RS2_FORMAT_MOTION_XYZ32F);
 		cfg.enable_stream(RS2_STREAM_POSE, RS2_FORMAT_6DOF);
 		int64_t already = 0;
 
-		auto profile = pipe.start(cfg, [&](rs2::frame frame)
-		{
-			if (rs2::pose_frame fs = frame.as<rs2::pose_frame>())
-			{
-				cango0 = true;
-				// std::cout << "hey dog1\n";
+		auto profile = pipe.start(cfg);
 
-				rs2_pose pose = fs.get_pose_data();
-				
-				// First 3 elements correspond to acceleration data [m/s^2]
-				// while the 3 last correspond to angular velocities [rad/s].
-				VIO::ImuAccGyr reading;
-				reading(0) = pose.acceleration.x;
-				reading(1) = pose.acceleration.y;
-				reading(2) = pose.acceleration.z;
-				reading(3) = pose.angular_acceleration.x;
-				reading(4) = pose.angular_acceleration.y;
-				reading(5) = pose.angular_acceleration.z;
-				VIO::Timestamp time = timestamp_rs_to_vio(frame);
-				//VIO::ImuAccGyr(pose.acceleration.x, pose.acceleration.y, pose.acceleration.z,
-													//  pose.angular_acceleration.x, pose.angular_acceleration.y, pose.angular_acceleration.z)
-				if (time >= already){
-				vio_pipeline.fillSingleImuQueue(VIO::ImuMeasurement(
-            timestamp_rs_to_vio(frame),reading
-            
-        ));} else {
-					// std::cout << "what the heck\n";
-				}
-			}
-			else if (auto fs = frame.as<rs2::frameset>())
-			{
-				// rs2::video_frame frame_left = fs.get_fisheye_frame(1).get_data();
-				// rs2::video_frame frame_right = fs.get_fisheye_frame(2);
-				if (cango0){
-				cango1 = true;
-				// std::cout << frame_id << " hey dog\n";
-				cv::Mat fisheye_left  = cv::Mat(cv::Size(848,800), CV_8UC1, (void*)fs.get_fisheye_frame(1).get_data(), cv::Mat::AUTO_STEP);
-				cv::Mat fisheye_right = cv::Mat(cv::Size(848,800), CV_8UC1, (void*)fs.get_fisheye_frame(2).get_data(), cv::Mat::AUTO_STEP);
 
-				cv::imshow("video",fisheye_left);
-				cv::imshow("video1",fisheye_right);
-				cv::waitKey(1);
 
-				VIO::Timestamp time = timestamp_rs_to_vio(frame);
-
-				vio_pipeline.fillLeftFrameQueue(VIO::make_unique<VIO::Frame>(
-            (VIO::FrameId)frame_id,
-            (VIO::Timestamp)time,
-            (VIO::CameraParams&)vio_params.camera_params_[0],
-            (cv::Mat&)fisheye_left
-        ));
-        vio_pipeline.fillRightFrameQueue(VIO::make_unique<VIO::Frame>(
-            (VIO::FrameId)frame_id,
-            (VIO::Timestamp)time,
-            (VIO::CameraParams&)vio_params.camera_params_[1],
-            (cv::Mat&)fisheye_right
-        ));
-				frame_id++; // BAD
-			}}
-		} );
-
-		while(!(cango0 && cango1)) {
-			std::this_thread::sleep_for(std::chrono::milliseconds(100));
-		}
-
-		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
     cv::Ptr<cv::Formatter> fmt = cv::Formatter::get(cv::Formatter::FMT_DEFAULT);
     fmt->set64fPrecision(3);
@@ -194,15 +146,89 @@ int main(int argc, char *argv[]) {
 
     // We also want somewhere to store our pose data
     Pose pose;
+			// Now for the main loop
 
-    // Now for the main loop
-			auto handle_pipeline = std::async(std::launch::async, &VIO::Pipeline::spin, &vio_pipeline);
-			std::cout << "refasdfsafdfasdfa\n";
-			vio_pipeline.spinViz(); // runs forever
-			// Above two lines will only do what you want if you have parallel_run: 1 in PipelineParams.yaml
+		while (true) {
+			// XXX: Get the most correct timestamp
+			struct timespec ts;
+			int ret = clock_gettime(CLOCK_MONOTONIC, &ts);
+			if (ret != 0) {
+				std::cout << "the gay pirate assassins are here, run.\n";
+				return 1;
+			}
+			int64_t the_time = os_timespec_to_ns(&ts);
 
-    // Shutdown the VIO pipeline
-    vio_pipeline.shutdown();
+			rs2::frameset frames = pipe.wait_for_frames();
+
+			std::cout << "size is " << frames.size() << "\n";
+
+			rs2::video_frame fisheye_left = frames.get_fisheye_frame(1);
+			rs2::video_frame fisheye_right = frames.get_fisheye_frame(2);
+
+			// rs2::frame has a bool operator that returns false if the frame is empty
+			// ie. if this is giving us an IMU value and not fisheye frames.
+			if (fisheye_left && fisheye_right){
+				std::cout << "Fishy.\n";
+
+
+
+			cv::Mat fisheye_left  = cv::Mat(cv::Size(848,800), CV_8UC1, (void*)frames.get_fisheye_frame(1).get_data(), cv::Mat::AUTO_STEP);
+			cv::Mat fisheye_right = cv::Mat(cv::Size(848,800), CV_8UC1, (void*)frames.get_fisheye_frame(2).get_data(), cv::Mat::AUTO_STEP);
+
+cv::imshow("video",fisheye_left);
+				cv::imshow("video1",fisheye_right);
+				cv::waitKey(1);
+
+			vio_pipeline.fillLeftFrameQueue(VIO::make_unique<VIO::Frame>(
+            (VIO::FrameId)frame_id,
+            (VIO::Timestamp)the_time,
+            (VIO::CameraParams&)vio_params.camera_params_[0],
+            (cv::Mat&)fisheye_left
+        ));
+        vio_pipeline.fillRightFrameQueue(VIO::make_unique<VIO::Frame>(
+            (VIO::FrameId)frame_id,
+            (VIO::Timestamp)the_time,
+            (VIO::CameraParams&)vio_params.camera_params_[1],
+            (cv::Mat&)fisheye_right
+        ));
+				frame_id++;
+			}
+
+			rs2::motion_frame gyro_frame = frames.first_or_default(RS2_STREAM_GYRO);
+			rs2::motion_frame accel_frame = frames.first_or_default(RS2_STREAM_ACCEL);
+
+			if (gyro_frame && gyro_frame.get_profile().stream_type() == RS2_STREAM_GYRO && accel_frame && accel_frame.get_profile().stream_type() == RS2_STREAM_ACCEL) { // Same deal as the fisheye frames. These better be in sync or so help me god
+				rs2_vector gyro_vec = gyro_frame.get_motion_data();
+				rs2_vector accel_vec = accel_frame.get_motion_data();
+
+				// First 3 elements correspond to acceleration data [m/s^2]
+				// while the 3 last correspond to angular velocities [rad/s].
+				VIO::ImuAccGyr reading;
+				reading(0) = accel_vec.x;
+				reading(1) = accel_vec.y;
+				reading(2) = accel_vec.z;
+				reading(1) = gyro_vec.x;
+				reading(2) = gyro_vec.y;
+				reading(3) = gyro_vec.z;
+				std::cout << "Wow, this is really an accelerating experience!\n";
+				std::cout << reading(0) << " " << reading(1) << " " << reading(2) << " " << reading(3) << " " << reading(4) << " " << reading(5) << " " << reading(6) << "\n";
+
+				vio_pipeline.fillSingleImuQueue(VIO::ImuMeasurement( the_time,reading));
+			
+			}
+
+
+
+
+
+			vio_pipeline.spin();
+			// std::cout << "refasdfsafdfasdfa\n";
+			vio_pipeline.spinViz(); 
+    
+		}
+		// unreachable for now
+	vio_pipeline.shutdown();
 
     return EXIT_SUCCESS;
+    
 }

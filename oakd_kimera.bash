@@ -13,7 +13,7 @@ DATASET_TYPE=0
 USE_LCD=0
 
 # Specify: 1 to enable logging of output files, 0 to not.
-LOG_OUTPUT=1
+LOG_OUTPUT=0
 ###################################################################
 
 ###################################################################
